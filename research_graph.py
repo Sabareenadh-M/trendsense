@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -10,10 +10,21 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_groq import ChatGroq
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
+
+try:
+    from langchain_tavily import TavilySearchAPIWrapper
+    TAVILY_AVAILABLE = True
+except ImportError:
+    try:
+        from langchain_community.tools.tavily_search import TavilySearchResults
+        TAVILY_AVAILABLE = True
+    except ImportError:
+        TAVILY_AVAILABLE = False
+        TavilySearchAPIWrapper = None
+        TavilySearchResults = None
 
 try:
     from langchain_ollama import ChatOllama
@@ -91,7 +102,9 @@ def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
 def get_llm(provider: str):
     if provider == "Local (Qwen 2.5)":
         if ChatOllama is None:
-            raise RuntimeError("langchain-ollama is not installed for local inference.")
+            if DEBUG_MODE:
+                print(f"[DEBUG] Local Ollama not available, using heuristic filtering.")
+            return _hard_filter_product_candidates([str(r.get("title", "")).strip() for r in results if r.get("title")])[:5]
         # Prefer requested model, but support common local tag variant.
         for model_name in ("qwen2.5:7b", "qwen2.5:7b-instruct"):
             try:
@@ -129,7 +142,7 @@ def _looks_like_tavily_error(text: str) -> bool:
     return False
 
 
-def _run_tavily_query(search_tool: TavilySearchResults, query: Any) -> Any:
+def _run_tavily_query(search_tool: Any, query: Any) -> Any:
     last_error: Optional[Exception] = None
     if isinstance(query, dict):
         payloads: List[Any] = [query]
@@ -140,7 +153,12 @@ def _run_tavily_query(search_tool: TavilySearchResults, query: Any) -> Any:
 
     for payload in payloads:
         try:
-            return search_tool.invoke(payload)
+            # Handle new langchain_tavily.TavilySearchAPIWrapper
+            if hasattr(search_tool, 'results'):
+                return search_tool.results(payload if isinstance(payload, str) else payload.get("query", payload))
+            # Handle legacy TavilySearchResults
+            else:
+                return search_tool.invoke(payload)
         except Exception as exc:
             last_error = exc
             continue
@@ -471,6 +489,7 @@ def _clean_titles_with_local_qwen(
     category_boundaries: str,
     debug_rows: Optional[List[tuple[str, str]]] = None,
     forbidden_keywords: Optional[List[str]] = None,
+    provider: str = "Cloud (Groq)",
 ) -> List[str]:
     """Use local Qwen 2.5 to discard non-products and return cleaned product names only."""
     if ChatOllama is None:
@@ -529,7 +548,7 @@ def _clean_titles_with_local_qwen(
             elif isinstance(parsed, str):
                 candidates = [parsed.strip()]
         except Exception:
-            candidates = [line.strip("-• ") for line in re.split(r"\n+", content) if line.strip()]
+            candidates = [line.strip("-â€¢ ") for line in re.split(r"\n+", content) if line.strip()]
 
         expanded: List[str] = []
         for candidate in candidates:
@@ -570,7 +589,17 @@ def _clean_titles_with_local_qwen(
             logger.warning("Local Qwen title-cleaning failed for title '%s': %s", title, exc)
             if debug_rows is not None:
                 debug_rows.append((title, "DISCARD"))
-            continue
+            # Try fallback provider if connection issue
+            if "Connection refused" in str(exc) and provider != "Local (Qwen 2.5)":
+                try:
+                    fallback_llm = get_llm(provider)
+                    response = fallback_llm.invoke(prompt)
+                    model_output = str(response.content).strip()
+                except Exception as fallback_exc:
+                    logger.warning("Fallback LLM also failed for title '%s': %s", title, fallback_exc)
+                    continue
+            else:
+                continue
 
         cleaned_names = _parse_model_output_to_names(model_output)
         if not cleaned_names:
@@ -978,6 +1007,7 @@ def discovery_node(state: GraphState) -> Dict[str, Any]:
         category_boundaries=category_boundaries,
         debug_rows=debug_rows,
         forbidden_keywords=forbidden_keywords,
+        provider=state.get("provider", "Cloud (Groq)"),
     )
     if DEBUG_MODE:
         _log_category_profile(category_profile, state["category"])
@@ -1342,18 +1372,21 @@ def main() -> None:
         print("Warning: GROQ_API_KEY not set. Falling back to non-LLM filtering/SEO where possible.")
 
     try:
-        result_state = run(category, provider)
-    except Exception as exc:
-        logger.error("Graph execution stopped: %s", exc)
         raise SystemExit(1) from exc
+        category = args.category or input("Enter e-commerce category: ").strip()
+        if not category:
+            raise ValueError("Category cannot be empty.")
+    
+        # Auto-detect cloud environment and use Groq if on Streamlit Cloud
+        is_streamlit_cloud = os.getenv("STREAMLIT_SERVER_HEADLESS") == "true"
+        default_provider = "Cloud (Groq)" if is_streamlit_cloud else "Local (Qwen 2.5)"
+        provider = args.provider if args.provider != "Local (Qwen 2.5)" else default_provider
 
-    output_path = save_report(result_state, Path("output"))
+        missing = [k for k in ("TAVILY_API_KEY", "GROQ_API_KEY") if not os.getenv(k)]
     if output_path is None:
         raise SystemExit(1)
 
     print("\nTop Product Opportunities:\n")
-    for i, item in enumerate(result_state["final_report"], start=1):
-        print(f"{i}. {item['product_name']}")
         print(f"   SuccessScore: {item['success_score']}")
         print(f"   Demand: {item['demand_score']} | Margin: {item['margin_score']} | Supply: {item['supply_reliability_score']}")
         print(f"   Amazon Avg: ${item['amazon_avg_price']} | AliExpress Avg: ${item['aliexpress_avg_price']} | Shipping: {item['shipping_days']} days")
@@ -1364,3 +1397,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

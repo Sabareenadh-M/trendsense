@@ -1352,7 +1352,7 @@ def main() -> None:
     parser.add_argument(
         "--provider",
         choices=["Local (Qwen 2.5)", "Cloud (Groq)"],
-        default="Local (Qwen 2.5)",
+        default="Cloud (Groq)",
         help="LLM provider used for intelligence steps.",
     )
     args = parser.parse_args()
@@ -1372,21 +1372,18 @@ def main() -> None:
         print("Warning: GROQ_API_KEY not set. Falling back to non-LLM filtering/SEO where possible.")
 
     try:
+        result_state = run(category, provider)
+    except Exception as exc:
+        logger.error("Graph execution stopped: %s", exc)
         raise SystemExit(1) from exc
-        category = args.category or input("Enter e-commerce category: ").strip()
-        if not category:
-            raise ValueError("Category cannot be empty.")
-    
-        # Auto-detect cloud environment and use Groq if on Streamlit Cloud
-        is_streamlit_cloud = os.getenv("STREAMLIT_SERVER_HEADLESS") == "true"
-        default_provider = "Cloud (Groq)" if is_streamlit_cloud else "Local (Qwen 2.5)"
-        provider = args.provider if args.provider != "Local (Qwen 2.5)" else default_provider
 
-        missing = [k for k in ("TAVILY_API_KEY", "GROQ_API_KEY") if not os.getenv(k)]
+    output_path = save_report(result_state, Path("output"))
     if output_path is None:
         raise SystemExit(1)
 
     print("\nTop Product Opportunities:\n")
+    for i, item in enumerate(result_state["final_report"], start=1):
+        print(f"{i}. {item['product_name']}")
         print(f"   SuccessScore: {item['success_score']}")
         print(f"   Demand: {item['demand_score']} | Margin: {item['margin_score']} | Supply: {item['supply_reliability_score']}")
         print(f"   Amazon Avg: ${item['amazon_avg_price']} | AliExpress Avg: ${item['aliexpress_avg_price']} | Shipping: {item['shipping_days']} days")

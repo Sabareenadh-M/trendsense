@@ -15,7 +15,7 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 try:
-    from langchain_tavily import TavilySearchAPIWrapper
+    from langchain_tavily import TavilySearch
     TAVILY_AVAILABLE = True
 except ImportError:
     try:
@@ -23,7 +23,7 @@ except ImportError:
         TAVILY_AVAILABLE = True
     except ImportError:
         TAVILY_AVAILABLE = False
-        TavilySearchAPIWrapper = None
+        TavilySearch = None
         TavilySearchResults = None
 
 try:
@@ -102,9 +102,7 @@ def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
 def get_llm(provider: str):
     if provider == "Local (Qwen 2.5)":
         if ChatOllama is None:
-            if DEBUG_MODE:
-                print(f"[DEBUG] Local Ollama not available, using heuristic filtering.")
-            return _hard_filter_product_candidates([str(r.get("title", "")).strip() for r in results if r.get("title")])[:5]
+            raise RuntimeError("langchain-ollama is not installed for local inference.")
         # Prefer requested model, but support common local tag variant.
         for model_name in ("qwen2.5:7b", "qwen2.5:7b-instruct"):
             try:
@@ -166,6 +164,24 @@ def _run_tavily_query(search_tool: Any, query: Any) -> Any:
     raise RuntimeError(
         f"Tavily search failed for query: {query}. Error: {last_error}"
     )
+
+
+def _create_tavily_search_tool(max_results: int = 8) -> Any:
+    """Create Tavily search tool using the new package first, then legacy fallback."""
+    if not TAVILY_AVAILABLE:
+        raise RuntimeError(
+            "Tavily search package not found. Install langchain-tavily or langchain-community Tavily support."
+        )
+
+    # Preferred non-deprecated implementation.
+    if TavilySearch is not None:
+        return TavilySearch(max_results=max_results)
+
+    # Backward-compatible fallback.
+    if TavilySearchResults is not None:
+        return TavilySearchResults(max_results=max_results)
+
+    raise RuntimeError("No Tavily search class is available.")
 
 
 def _normalize_search_results(raw: Any) -> List[Dict[str, Any]]:
@@ -492,10 +508,30 @@ def _clean_titles_with_local_qwen(
     provider: str = "Cloud (Groq)",
 ) -> List[str]:
     """Use local Qwen 2.5 to discard non-products and return cleaned product names only."""
-    if ChatOllama is None:
-        raise RuntimeError("langchain-ollama is not installed for local title cleaning.")
+    local_llm: Optional[Any] = None
+    fallback_llm: Optional[Any] = None
 
-    llm = ChatOllama(model="qwen2.5:7b", temperature=0)
+    if ChatOllama is not None:
+        try:
+            local_llm = ChatOllama(model="qwen2.5:7b", temperature=0)
+            local_llm.invoke("Respond with exactly: ok")
+        except Exception:
+            local_llm = None
+
+    # Keep Qwen support intact, but gracefully fall back on cloud where Ollama is unavailable.
+    if provider != "Local (Qwen 2.5)" or local_llm is None:
+        try:
+            fallback_llm = get_llm("Cloud (Groq)")
+        except Exception:
+            fallback_llm = None
+
+    if local_llm is None and fallback_llm is None:
+        if DEBUG_MODE:
+            print("[DEBUG] Qwen and Groq unavailable for title cleaning; using heuristic fallback.")
+        return _hard_filter_product_candidates(
+            [str(r.get("title") or "").strip() for r in results if str(r.get("title") or "").strip()]
+        )[:5]
+
     cleaned_products: List[str] = []
     forbidden_set = {str(item).strip().lower() for item in (forbidden_keywords or []) if str(item).strip()}
 
@@ -548,7 +584,7 @@ def _clean_titles_with_local_qwen(
             elif isinstance(parsed, str):
                 candidates = [parsed.strip()]
         except Exception:
-            candidates = [line.strip("-â€¢ ") for line in re.split(r"\n+", content) if line.strip()]
+            candidates = [line.strip("-* ") for line in re.split(r"\n+", content) if line.strip()]
 
         expanded: List[str] = []
         for candidate in candidates:
@@ -583,23 +619,19 @@ def _clean_titles_with_local_qwen(
 
         prompt = f"{instruction}\n\nRaw title: {title}"
         try:
-            response = llm.invoke(prompt)
-            model_output = str(response.content).strip()
+            if local_llm is not None:
+                response = local_llm.invoke(prompt)
+                model_output = str(response.content).strip()
+            elif fallback_llm is not None:
+                response = fallback_llm.invoke(prompt)
+                model_output = str(response.content).strip()
+            else:
+                model_output = "DISCARD"
         except Exception as exc:
-            logger.warning("Local Qwen title-cleaning failed for title '%s': %s", title, exc)
+            logger.warning("Title-cleaning failed for title '%s': %s", title, exc)
             if debug_rows is not None:
                 debug_rows.append((title, "DISCARD"))
-            # Try fallback provider if connection issue
-            if "Connection refused" in str(exc) and provider != "Local (Qwen 2.5)":
-                try:
-                    fallback_llm = get_llm(provider)
-                    response = fallback_llm.invoke(prompt)
-                    model_output = str(response.content).strip()
-                except Exception as fallback_exc:
-                    logger.warning("Fallback LLM also failed for title '%s': %s", title, fallback_exc)
-                    continue
-            else:
-                continue
+            continue
 
         cleaned_names = _parse_model_output_to_names(model_output)
         if not cleaned_names:
@@ -974,7 +1006,7 @@ def discovery_node(state: GraphState) -> Dict[str, Any]:
     minimum_viable_price = float(category_profile.get("minimum_viable_price", 20.0))
     forbidden_keywords = list(category_profile.get("forbidden_keywords", []))
 
-    search_tool = TavilySearchResults(max_results=8)
+    search_tool = _create_tavily_search_tool(max_results=8)
     negative_terms = ["review", "tested", "best of", "cnet", "wired", "pcmag"] + forbidden_keywords
     negative_constraint = " ".join(
         f'-"{term}"' if " " in term else f"-{term}" for term in dict.fromkeys(negative_terms)
@@ -1027,7 +1059,7 @@ def discovery_node(state: GraphState) -> Dict[str, Any]:
 
 
 def deep_research_node(state: GraphState) -> Dict[str, Any]:
-    search_tool = TavilySearchResults(max_results=6)
+    search_tool = _create_tavily_search_tool(max_results=6)
     researched: List[ResearchProduct] = []
     category_profile = state.get("category_profile", {})
     minimum_viable_price = float(
@@ -1123,7 +1155,7 @@ def deep_research_node(state: GraphState) -> Dict[str, Any]:
 
 
 def sentiment_node(state: GraphState) -> Dict[str, Any]:
-    search_tool = TavilySearchResults(max_results=6)
+    search_tool = _create_tavily_search_tool(max_results=6)
     enriched: List[ResearchProduct] = []
 
     for item in state["researched_products"]:

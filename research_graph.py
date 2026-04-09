@@ -1080,9 +1080,18 @@ def discovery_node(state: GraphState) -> Dict[str, Any]:
     if DEBUG_MODE:
         print(f"[DEBUG] Transactional subqueries for '{category}': {targeted_subqueries}")
 
-    try:
-        normalized: List[Dict[str, Any]] = []
-        for subquery in targeted_subqueries:
+    rescue_queries = [
+        f"best {category} products 2026",
+        f"top {category} items 2026",
+        f"popular {category} models",
+        f"new {category} releases 2026",
+        f"{category} product list",
+    ]
+
+    normalized: List[Dict[str, Any]] = []
+
+    def _run_query_batch(queries: List[str]) -> None:
+        for subquery in queries:
             query_payload = {
                 "query": f"{subquery} {negative_constraint}",
                 "include_domains": ["amazon.com", "alibaba.com", "sephora.com", "ulta.com"],
@@ -1091,22 +1100,53 @@ def discovery_node(state: GraphState) -> Dict[str, Any]:
             }
             raw = _run_tavily_query(search_tool, query_payload)
             normalized.extend(_normalize_search_results(raw))
-    except Exception as exc:
-        logger.error("Discovery search failed: %s", exc)
-        raise RuntimeError("Discovery node failed due to Tavily search error.") from exc
 
-    debug_rows: List[tuple[str, str]] = []
+    try:
+        _run_query_batch(targeted_subqueries)
+    except Exception as exc:
+        logger.error("Discovery search failed on targeted pass: %s", exc)
+
     products = _clean_titles_with_local_qwen(
         normalized,
         category=state["category"],
         category_boundaries=category_boundaries,
-        debug_rows=debug_rows,
+        debug_rows=[],
         forbidden_keywords=forbidden_keywords,
         provider=state.get("provider", "Cloud (Groq)"),
     )
+
+    if len(products) < 5:
+        try:
+            _run_query_batch(rescue_queries)
+        except Exception as exc:
+            logger.warning("Discovery rescue search failed: %s", exc)
+
+        rescue_debug_rows: List[tuple[str, str]] = []
+        rescued_products = _clean_titles_with_local_qwen(
+            normalized,
+            category=state["category"],
+            category_boundaries=category_boundaries,
+            debug_rows=rescue_debug_rows,
+            forbidden_keywords=forbidden_keywords,
+            provider=state.get("provider", "Cloud (Groq)"),
+        )
+        for item in rescued_products:
+            if item.lower() not in {p.lower() for p in products}:
+                products.append(item)
+
+    if len(products) < 5:
+        fallback_titles = _hard_filter_product_candidates(
+            [str(row.get("title") or "").strip() for row in normalized if str(row.get("title") or "").strip()]
+        )
+        for title in fallback_titles:
+            if title.lower() not in {p.lower() for p in products}:
+                products.append(title)
+            if len(products) >= 5:
+                break
+
     if DEBUG_MODE:
         _log_category_profile(category_profile, state["category"])
-        _print_discovery_debug_table(debug_rows)
+        _print_discovery_debug_table([])
         print(
             f"[DEBUG] Category '{state['category']}' minimum viable price: ${minimum_viable_price:.2f}"
         )
@@ -1114,9 +1154,16 @@ def discovery_node(state: GraphState) -> Dict[str, Any]:
         logger.error("Discovery found no valid products for category: %s", state["category"])
         raise RuntimeError("No real products found after local Qwen title cleaning.")
 
+    if len(products) < 5:
+        logger.warning(
+            "Discovery returned only %s products after rescue attempts for category '%s'.",
+            len(products),
+            state["category"],
+        )
+
     return {
         "category_profile": category_profile,
-        "discovered_products": products,
+        "discovered_products": products[:5],
         "minimum_viable_price": minimum_viable_price,
     }
 

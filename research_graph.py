@@ -5,9 +5,17 @@ import json
 import logging
 import os
 import re
+import warnings
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# Silence noisy upstream warning on Python 3.14 in hosted environments.
+warnings.filterwarnings(
+    "ignore",
+    message="Core Pydantic V1 functionality isn't compatible with Python 3.14 or greater\\.",
+    category=UserWarning,
+)
 
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
@@ -41,6 +49,7 @@ except ImportError:
 
 logger = logging.getLogger("trendsense")
 DEBUG_MODE = True
+_GROQ_LLM_CACHE: Optional[Any] = None
 
 
 class ResearchProduct(TypedDict):
@@ -100,6 +109,8 @@ def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
 
 
 def get_llm(provider: str):
+    global _GROQ_LLM_CACHE
+
     if provider == "Local (Qwen 2.5)":
         if ChatOllama is None:
             raise RuntimeError("langchain-ollama is not installed for local inference.")
@@ -117,7 +128,40 @@ def get_llm(provider: str):
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             raise RuntimeError("GROQ_API_KEY is missing for Cloud (Groq) mode.")
-        return ChatGroq(model="llama-3.3-70b-specdec", api_key=api_key)
+
+        if _GROQ_LLM_CACHE is not None:
+            return _GROQ_LLM_CACHE
+
+        preferred_model = os.getenv("GROQ_MODEL", "").strip()
+        model_candidates = [
+            m
+            for m in [
+                preferred_model,
+                "llama-3.3-70b-versatile",
+                "llama-3.1-8b-instant",
+                "llama3-70b-8192",
+                "mixtral-8x7b-32768",
+            ]
+            if m
+        ]
+
+        last_error: Optional[Exception] = None
+        for model_name in model_candidates:
+            try:
+                llm = ChatGroq(model=model_name, api_key=api_key, temperature=0)
+                llm.invoke("Respond with exactly: ok")
+                _GROQ_LLM_CACHE = llm
+                if DEBUG_MODE:
+                    print(f"[DEBUG] Using Groq model: {model_name}")
+                return llm
+            except Exception as exc:
+                last_error = exc
+                # Try next model if this one is deprecated or unavailable.
+                continue
+
+        raise RuntimeError(
+            f"No supported Groq model is available. Last error: {last_error}"
+        )
 
     raise ValueError(f"Unsupported provider: {provider}")
 

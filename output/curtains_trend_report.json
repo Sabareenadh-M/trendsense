@@ -1,0 +1,67 @@
+[
+  {
+    "product_name": "LEVOLOR®",
+    "success_score": 46.6,
+    "seo_description": "Introducing the LEVOLOR® Curtains—your ultimate solution for transforming any space! Crafted with premium materials, these curtains offer exceptional light control and privacy while maintaining a sleek, modern look. Perfect for both homes and commercial spaces, they are easy to install and maintain. With a wide range of colors and patterns, you can find the perfect match for your decor. Trust LEVOLOR®—a brand trusted by millions worldwide. Experience the difference with our high-quality, stylish curtains today! Order now to improve daily results with a trusted, trend-driven product choice.",
+    "demand_score": 56.0,
+    "margin_score": 0.0,
+    "supply_reliability_score": 96.0,
+    "sentiment_score": 50.0,
+    "sentiment_notes": "No review or feedback snippets were available; using neutral sentiment.",
+    "amazon_avg_price": 38.71,
+    "aliexpress_avg_price": 62.0,
+    "shipping_days": 0.0
+  },
+  {
+    "product_name": "Blackout Curtains",
+    "success_score": 44.5,
+    "seo_description": "Experience the ultimate in privacy and comfort with our premium Blackout Curtains. Designed to block out 100% of light, these curtains ensure deep, uninterrupted sleep. Perfect for bedrooms, home offices, or any room needing complete darkness. Made from high-quality, durable materials, they are easy to clean and maintain. Our curtains come in a sleek black color that complements any decor. With a lifetime warranty and excellent customer service, you can trust your purchase. Say goodbye to pesky light leaks and hello to serene nights with our Blackout Curtains. Order now to improve daily results with a trusted, trend-driven product choice.",
+    "demand_score": 42.0,
+    "margin_score": 0.0,
+    "supply_reliability_score": 96.0,
+    "sentiment_score": 85.0,
+    "sentiment_notes": "Professional reviews are generally positive, highlighting the effectiveness of blackout curtains in blocking light. Social threads also show a high level of satisfaction with specific brands like UBlockout Shades and Pillowfort. No long-term usage issues or real-world bugs were reported.",
+    "amazon_avg_price": 34.04,
+    "aliexpress_avg_price": 41.79,
+    "shipping_days": 0.0
+  },
+  {
+    "product_name": "Veolin®",
+    "success_score": 41.79,
+    "seo_description": "Introducing Veolin® Curtains – the perfect blend of elegance and functionality! Crafted from premium materials, these curtains offer exceptional light control and thermal insulation, ensuring your home stays cool in summer and warm in winter. With a wide range of stylish designs to choose from, Veolin® curtains are not only functional but also add a touch of sophistication to any room. Trust the experts at Veolin® for high-quality products backed by years of experience. Experience the difference with Veolin® – where beauty meets efficiency! Order now to improve daily results with a trusted, trend-driven product choice.",
+    "demand_score": 7.0,
+    "margin_score": 51.98,
+    "supply_reliability_score": 92.0,
+    "sentiment_score": 50.0,
+    "sentiment_notes": "No review or feedback snippets were available; using neutral sentiment.",
+    "amazon_avg_price": 35.42,
+    "aliexpress_avg_price": 17.01,
+    "shipping_days": 0.0
+  },
+  {
+    "product_name": "Diy curtains",
+    "success_score": 35.4,
+    "seo_description": "Craft your perfect home with our DIY Curtains! Perfect for adding a personal touch to any room, these curtains are easy to sew and come with all the necessary materials included. Enhance privacy, block out light, or add a pop of color—our DIY options allow you to customize every detail. Made from high-quality fabric, they're durable yet soft to the touch. Plus, our step-by-step instructions ensure even beginners can create beautiful window treatments. Trust us; your home will thank you! Order now to improve daily results with a trusted, trend-driven product choice.",
+    "demand_score": 28.0,
+    "margin_score": 0.0,
+    "supply_reliability_score": 96.0,
+    "sentiment_score": 50.0,
+    "sentiment_notes": "No review or feedback snippets were available; using neutral sentiment.",
+    "amazon_avg_price": 0.0,
+    "aliexpress_avg_price": 0.0,
+    "shipping_days": 0.0
+  },
+  {
+    "product_name": "Curtains living room",
+    "success_score": 35.24,
+    "seo_description": "Elevate your living room with our stunning curtains! Perfect for adding privacy while letting in just the right amount of light. Crafted from high-quality, durable fabric, these curtains are both stylish and practical. They come in a variety of colors to match any decor. Our curtains feature easy installation and energy-efficient properties, reducing heat loss and saving you money on energy bills. Trust us; our satisfied customers rave about their quality and beauty. Transform your living space today with our top-rated curtains! Order now to improve daily results with a trusted, trend-driven product choice.",
+    "demand_score": 21.0,
+    "margin_score": 8.79,
+    "supply_reliability_score": 96.0,
+    "sentiment_score": 50.0,
+    "sentiment_notes": "No review or feedback snippets were available; using neutral sentiment.",
+    "amazon_avg_price": 22.99,
+    "aliexpress_avg_price": 20.97,
+    "shipping_days": 0.0
+  }
+]

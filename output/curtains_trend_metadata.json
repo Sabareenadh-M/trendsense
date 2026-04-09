@@ -1,0 +1,15 @@
+{
+  "category": "curtains",
+  "provider": "Local (Qwen 2.5)",
+  "category_profile": {
+    "minimum_viable_price": 5.99,
+    "maximum_viable_price": 399.99,
+    "forbidden_keywords": [
+      "junk",
+      "accessories",
+      "content"
+    ],
+    "category_boundaries": "Curtains belong to the product family of window treatments, which includes items designed to cover windows for various purposes such as privacy, light control, and decoration. Items that must be excluded as cross-category noise include window blinds, shades, and roller shutters, as these are distinct categories with their own specific functionalities and design characteristics."
+  },
+  "minimum_viable_price": 5.99
+}

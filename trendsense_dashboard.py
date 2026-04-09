@@ -12,6 +12,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from langchain_groq import ChatGroq
 from langchain_community.tools.tavily_search import TavilySearchResults
 from dotenv import load_dotenv
 
@@ -295,6 +296,47 @@ def _escape_md(text: Any) -> str:
     return str(text).replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _get_ai_llm(provider: str):
+    """Return the best available LLM for the ad planner."""
+    if provider == "Cloud (Groq)":
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise RuntimeError("GROQ_API_KEY is missing.")
+
+        model_candidates = [
+            os.getenv("GROQ_MODEL", "").strip(),
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "llama3-70b-8192",
+            "mixtral-8x7b-32768",
+        ]
+
+        last_error: Exception | None = None
+        for model_name in [name for name in model_candidates if name]:
+            try:
+                llm = ChatGroq(model=model_name, api_key=api_key, temperature=0.4)
+                llm.invoke("Respond with exactly: ok")
+                return llm
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        raise RuntimeError(f"No supported Groq model is available. Last error: {last_error}")
+
+    if ChatOllama is None:
+        raise RuntimeError("langchain-ollama is not installed.")
+
+    for model_name in ("qwen2.5:7b", "qwen2.5:7b-instruct"):
+        try:
+            llm = ChatOllama(model=model_name, temperature=0.4)
+            llm.invoke("Respond with exactly: ok")
+            return llm
+        except Exception:
+            continue
+
+    raise RuntimeError("Local Ollama model not found. Pull qwen2.5:7b or qwen2.5:7b-instruct.")
+
+
 def build_export_markdown(frame: pd.DataFrame) -> str:
     """Build a clean Markdown project report from the current session state."""
     category = st.session_state.get("research_category") or str(st.session_state.get("category_profile", {}).get("category", "Project"))
@@ -512,11 +554,16 @@ def render_market_research_tab(selected_provider: str) -> None:
 
 
 def generate_local_ai_content(product_row: pd.Series) -> dict[str, str]:
-    """Generate product description, 3-phase ad plan, and viral hooks via local Ollama."""
-    if ChatOllama is None:
-        raise RuntimeError("langchain-ollama is not installed. Install it via requirements.txt.")
+    """Generate product description, 3-phase ad plan, and viral hooks using the selected provider."""
+    provider = st.session_state.get("llm_provider", "Cloud (Groq)")
+    try:
+        llm = _get_ai_llm(provider)
+    except Exception:
+        if provider != "Cloud (Groq)":
+            llm = _get_ai_llm("Cloud (Groq)")
+        else:
+            raise
 
-    llm = ChatOllama(model="qwen2.5:7b", temperature=0.4)
     product_name = str(product_row["product_name"])
     source_description = str(product_row.get("seo_description", "")).strip()
     amazon_price = float(product_row['amazon_avg_price'])
@@ -596,7 +643,7 @@ Format as numbered list. Return ONLY the hooks.""".strip()
 
 
 def render_ai_content_tab() -> None:
-    """Tab 2: AI Ad Planner - description, 3-phase plan, and viral hooks using local Ollama."""
+    """Tab 2: AI Ad Planner - description, 3-phase plan, and viral hooks using the selected provider."""
     st.subheader("AI Ad Planner")
 
     if not st.session_state.research_data:
@@ -614,7 +661,8 @@ def render_ai_content_tab() -> None:
     if generate_clicked:
         selected_row = frame.loc[frame["product_name"] == selected_product_name].iloc[0]
         try:
-            with st.spinner("Generating AI strategy locally via Ollama (qwen2.5:7b)..."):
+            provider_label = st.session_state.get("llm_provider", "Cloud (Groq)")
+            with st.spinner(f"Generating AI strategy via {provider_label}..."):
                 content = generate_local_ai_content(selected_row)
             st.session_state.ai_outputs[selected_product_name] = content
             st.success(f"✅ Strategy generated for {selected_product_name}")
@@ -622,7 +670,7 @@ def render_ai_content_tab() -> None:
             if "Data Inconsistency Detected" in str(exc):
                 st.error("Data Inconsistency Detected")
             else:
-                st.error("Could not connect to Ollama or generate content.")
+                st.error("Could not generate content with the selected AI provider.")
                 st.code(str(exc), language="bash")
 
     if selected_product_name in st.session_state.ai_outputs:

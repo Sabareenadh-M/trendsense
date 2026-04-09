@@ -151,12 +151,17 @@ def _run_tavily_query(search_tool: Any, query: Any) -> Any:
 
     for payload in payloads:
         try:
-            # Handle new langchain_tavily.TavilySearchAPIWrapper
-            if hasattr(search_tool, 'results'):
-                return search_tool.results(payload if isinstance(payload, str) else payload.get("query", payload))
-            # Handle legacy TavilySearchResults
-            else:
+            # Prefer invoke for both modern and legacy tools.
+            if hasattr(search_tool, "invoke"):
+                tool_name = type(search_tool).__name__.lower()
+                # Modern TavilySearch expects query string in invoke most reliably.
+                if "tavilysearch" in tool_name and isinstance(payload, dict):
+                    return search_tool.invoke(payload.get("query", ""))
                 return search_tool.invoke(payload)
+            # Fallback for wrapper-style API.
+            if hasattr(search_tool, "results"):
+                query_text = payload if isinstance(payload, str) else str(payload.get("query", ""))
+                return search_tool.results(query_text)
         except Exception as exc:
             last_error = exc
             continue
@@ -185,19 +190,33 @@ def _create_tavily_search_tool(max_results: int = 8) -> Any:
 
 
 def _normalize_search_results(raw: Any) -> List[Dict[str, Any]]:
+    def _safe_dump(value: Any) -> str:
+        return json.dumps(value, ensure_ascii=True, default=str)
+
+    if isinstance(raw, BaseException):
+        raise RuntimeError(f"Invalid Tavily response: {raw}")
+
     if isinstance(raw, str) and _looks_like_tavily_error(raw):
         raise RuntimeError(f"Invalid Tavily response: {raw}")
 
     if isinstance(raw, dict):
-        if _looks_like_tavily_error(json.dumps(raw, ensure_ascii=True)):
+        if _looks_like_tavily_error(_safe_dump(raw)):
             raise RuntimeError(f"Invalid Tavily response: {raw}")
         if isinstance(raw.get("results"), list):
             return [r for r in raw["results"] if isinstance(r, dict)]
         return [raw]
     if isinstance(raw, list):
-        if _looks_like_tavily_error(json.dumps(raw, ensure_ascii=True)):
+        if _looks_like_tavily_error(_safe_dump(raw)):
             raise RuntimeError(f"Invalid Tavily response: {raw}")
-        return [r for r in raw if isinstance(r, dict)]
+        normalized: List[Dict[str, Any]] = []
+        for item in raw:
+            if isinstance(item, dict):
+                normalized.append(item)
+            elif isinstance(item, str) and item.strip():
+                normalized.append({"title": item.strip(), "content": item.strip()})
+            elif isinstance(item, BaseException):
+                normalized.append({"title": "Tavily Error", "content": str(item)})
+        return normalized
     if isinstance(raw, str):
         return [{"title": line.strip(), "content": line.strip()} for line in raw.splitlines() if line.strip()]
     return []

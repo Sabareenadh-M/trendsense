@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+import hashlib
 
 import pandas as pd
 import plotly.express as px
@@ -47,6 +49,7 @@ st.markdown(
 DEFAULT_REPORT_PATH = Path("output/beauty_products_trend_report.json")
 RESEARCH_SCRIPT_PATH = Path("research_graph.py")
 PROVIDER_OPTIONS = ["Local (Qwen 2.5)", "Cloud (Groq)"]
+USERS_FILE_PATH = Path("data/users.json")
 
 # Ensure API keys from project .env are available inside Streamlit runtime.
 load_dotenv(override=True)
@@ -68,6 +71,217 @@ def initialize_session_state() -> None:
         st.session_state.ai_outputs = {}
     if "llm_provider" not in st.session_state:
         st.session_state.llm_provider = PROVIDER_OPTIONS[0]
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    if "current_user" not in st.session_state:
+        st.session_state.current_user = ""
+
+
+def _hash_password(password: str, salt: bytes | None = None) -> tuple[str, str]:
+    """Create a PBKDF2 hash and return (salt_hex, hash_hex)."""
+    use_salt = salt or secrets.token_bytes(16)
+    pwd_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), use_salt, 100_000)
+    return use_salt.hex(), pwd_hash.hex()
+
+
+def _verify_password(password: str, salt_hex: str, hash_hex: str) -> bool:
+    """Validate plain password against stored PBKDF2 hash."""
+    try:
+        salt = bytes.fromhex(salt_hex)
+        expected_hash = bytes.fromhex(hash_hex)
+    except ValueError:
+        return False
+
+    check_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100_000)
+    return secrets.compare_digest(check_hash, expected_hash)
+
+
+def _load_users() -> dict[str, dict[str, str]]:
+    """Load saved users from data/users.json."""
+    if not USERS_FILE_PATH.exists():
+        return {}
+
+    try:
+        with USERS_FILE_PATH.open("r", encoding="utf-8") as file:
+            payload = json.load(file)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_users(users: dict[str, dict[str, str]]) -> None:
+    """Persist user records in data/users.json."""
+    USERS_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with USERS_FILE_PATH.open("w", encoding="utf-8") as file:
+        json.dump(users, file, indent=2)
+
+
+def _validate_signup_password(password: str) -> str | None:
+    """Return validation message for weak password, otherwise None."""
+    if len(password) < 8:
+        return "Password must be at least 8 characters."
+    if not re.search(r"[A-Z]", password):
+        return "Password must include at least one uppercase letter."
+    if not re.search(r"[^A-Za-z0-9]", password):
+        return "Password must include at least one special character."
+    return None
+
+
+def _render_auth_theme() -> None:
+    """Inject auth-page styling for a polished login/signup experience."""
+    st.markdown(
+        """
+        <style>
+        :root {
+            --auth-bg-a: #eef9f4;
+            --auth-bg-b: #e6f2ff;
+            --auth-accent: #0f766e;
+            --auth-accent-2: #0284c7;
+            --auth-text: #102a43;
+            --auth-muted: #486581;
+            --auth-border: #d9e2ec;
+        }
+
+        [data-testid="stAppViewContainer"] {
+            background:
+                radial-gradient(circle at 8% 12%, rgba(15, 118, 110, 0.12), transparent 34%),
+                radial-gradient(circle at 88% 15%, rgba(2, 132, 199, 0.12), transparent 32%),
+                linear-gradient(135deg, var(--auth-bg-a), var(--auth-bg-b));
+        }
+
+        .auth-title {
+            color: var(--auth-text);
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+            letter-spacing: 0.2px;
+        }
+
+        .auth-subtitle {
+            color: var(--auth-muted);
+            margin-bottom: 0.8rem;
+        }
+
+        .auth-shell {
+            background: rgba(255, 255, 255, 0.80);
+            border: 1px solid var(--auth-border);
+            border-radius: 16px;
+            padding: 0.8rem;
+            box-shadow: 0 14px 34px rgba(16, 42, 67, 0.08);
+        }
+
+        [data-testid="stTabs"] button {
+            border-radius: 10px;
+            font-weight: 600;
+        }
+
+        [data-testid="stForm"] {
+            background: #ffffff;
+            border: 1px solid #e4ecf3;
+            border-radius: 12px;
+            padding: 0.75rem;
+        }
+
+        [data-testid="stTextInput"] label {
+            color: var(--auth-text);
+            font-weight: 600;
+        }
+
+        [data-testid="stTextInput"] input {
+            border: 1px solid var(--auth-border);
+            border-radius: 10px;
+        }
+
+        [data-testid="stFormSubmitButton"] button[kind="primary"] {
+            background: linear-gradient(90deg, var(--auth-accent), var(--auth-accent-2));
+            border: none;
+            font-weight: 700;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_auth_pages() -> bool:
+    """Render login/signup pages and return auth status."""
+    _render_auth_theme()
+    left_col, center_col, right_col = st.columns([1, 1.35, 1])
+    with center_col:
+        st.markdown('<h1 class="auth-title">Welcome to TrendSense</h1>', unsafe_allow_html=True)
+        st.markdown(
+            '<p class="auth-subtitle">Sign in or create your account to access market intelligence and AI planning.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="auth-shell">', unsafe_allow_html=True)
+        login_tab, signup_tab = st.tabs(["Login", "Sign Up"])
+    users = _load_users()
+
+    with center_col:
+        with login_tab:
+            st.caption("Use your existing credentials to continue.")
+            with st.form("login_form", clear_on_submit=False):
+                login_username = st.text_input("Username")
+                login_password = st.text_input("Password", type="password")
+                login_clicked = st.form_submit_button("Login", type="primary", use_container_width=True)
+
+            if login_clicked:
+                user_key = login_username.strip().lower()
+                user_record = users.get(user_key)
+                if not user_record:
+                    st.error("Account not found. Please sign up first.")
+                else:
+                    is_valid = _verify_password(
+                        login_password,
+                        user_record.get("salt", ""),
+                        user_record.get("password_hash", ""),
+                    )
+                    if not is_valid:
+                        st.error("Invalid username or password.")
+                    else:
+                        st.session_state.authenticated = True
+                        st.session_state.current_user = user_record.get("username", login_username.strip())
+                        st.success("Login successful.")
+                        st.rerun()
+
+        with signup_tab:
+            st.caption("Password rules: minimum 8 characters, 1 uppercase letter, and 1 special character.")
+            with st.form("signup_form", clear_on_submit=True):
+                signup_username = st.text_input("Create Username")
+                signup_email = st.text_input("Email")
+                signup_password = st.text_input("Create Password", type="password")
+                confirm_password = st.text_input("Confirm Password", type="password")
+                signup_clicked = st.form_submit_button("Create Account", type="primary", use_container_width=True)
+
+            if signup_clicked:
+                clean_username = signup_username.strip()
+                clean_email = signup_email.strip()
+                user_key = clean_username.lower()
+                password_error = _validate_signup_password(signup_password)
+
+                if not clean_username:
+                    st.error("Username is required.")
+                elif user_key in users:
+                    st.error("Username already exists. Please choose a different username.")
+                elif password_error is not None:
+                    st.error(password_error)
+                elif signup_password != confirm_password:
+                    st.error("Passwords do not match.")
+                elif not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", clean_email):
+                    st.error("Please enter a valid email address.")
+                else:
+                    salt_hex, hash_hex = _hash_password(signup_password)
+                    users[user_key] = {
+                        "username": clean_username,
+                        "email": clean_email,
+                        "salt": salt_hex,
+                        "password_hash": hash_hex,
+                    }
+                    _save_users(users)
+                    st.success("Account created. You can now log in from the Login tab.")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    return bool(st.session_state.authenticated)
 
 
 def _safe_report_filename(category: str) -> str:
@@ -468,6 +682,15 @@ def check_tavily_api_status() -> tuple[bool, str]:
 def render_sidebar(default_path: Path) -> tuple[Path, str]:
     """Sidebar controls for report path, methodology context, and refresh trigger."""
     st.sidebar.header("TrendSense Controls")
+    st.sidebar.caption(f"Signed in as: {st.session_state.current_user or 'User'}")
+
+    if st.sidebar.button("Logout", use_container_width=True):
+        st.session_state.authenticated = False
+        st.session_state.current_user = ""
+        st.toast("Logged out successfully.", icon="👋")
+        st.rerun()
+
+    st.sidebar.markdown("---")
 
     selected_provider = st.sidebar.selectbox(
         "LLM Intelligence Layer",
@@ -524,7 +747,7 @@ def render_market_research_tab(selected_provider: str) -> None:
 
     category = st.text_input(
         "Enter E-Commerce Category",
-        value="beauty products",
+        value="Car Accessories",
         help="Example: beauty products, smart home productivity, pet accessories, iphone 17 pro",
     )
 
@@ -826,10 +1049,15 @@ def render_comparison_tab() -> None:
 
 
 def main() -> None:
+    initialize_session_state()
+
+    if not st.session_state.authenticated:
+        render_auth_pages()
+        return
+
     st.title("TrendSense: AI-Driven E-Commerce Research Dashboard")
     st.caption("MCA Major Project Frontend")
 
-    initialize_session_state()
     selected_report_path, selected_provider = render_sidebar(DEFAULT_REPORT_PATH)
 
     # Load user-selected local report into session only if no in-memory results exist.

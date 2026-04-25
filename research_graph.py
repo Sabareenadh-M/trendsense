@@ -26,6 +26,7 @@ try:
     from langchain_tavily import TavilySearch
     TAVILY_AVAILABLE = True
 except ImportError:
+    TavilySearch = None
     try:
         from langchain_community.tools.tavily_search import TavilySearchResults
         TAVILY_AVAILABLE = True
@@ -312,6 +313,48 @@ def _hard_filter_product_candidates(candidates: List[str]) -> List[str]:
             filtered.append(candidate)
 
     return filtered
+
+
+def _seed_products_from_category(category: str) -> List[str]:
+    """Return deterministic seed products when discovery cleaning over-filters titles."""
+    lowered = category.lower().strip()
+
+    if any(token in lowered for token in ("car", "automotive", "vehicle", "accessories")):
+        return [
+            "Car Phone Mount",
+            "Dash Cam",
+            "Portable Tire Inflator",
+            "Car Vacuum Cleaner",
+            "Seat Gap Filler",
+        ]
+
+    if any(token in lowered for token in ("beauty", "makeup", "skincare", "lip")):
+        return [
+            "Hydrating Lip Gloss",
+            "Niacinamide Face Serum",
+            "Vitamin C Face Serum",
+            "Waterproof Eyeliner Pen",
+            "Matte Liquid Lipstick",
+        ]
+
+    if any(token in lowered for token in ("phone", "smartphone", "iphone", "android")):
+        return [
+            "Wireless Charger",
+            "USB-C Fast Charger",
+            "MagSafe Power Bank",
+            "Bluetooth Earbuds",
+            "Screen Protector",
+        ]
+
+    # Generic fallback for unknown categories.
+    core = re.sub(r"\s+", " ", category).strip() or "Product"
+    return [
+        f"{core} Starter Product",
+        f"{core} Pro Product",
+        f"{core} Premium Product",
+        f"{core} Compact Product",
+        f"{core} Best Seller Product",
+    ]
 
 
 def _enforce_model_name_candidates(candidates: List[str], category: str, provider: str) -> List[str]:
@@ -1106,11 +1149,12 @@ def discovery_node(state: GraphState) -> Dict[str, Any]:
     except Exception as exc:
         logger.error("Discovery search failed on targeted pass: %s", exc)
 
+    discovery_debug_rows: List[tuple[str, str]] = []
     products = _clean_titles_with_local_qwen(
         normalized,
         category=state["category"],
         category_boundaries=category_boundaries,
-        debug_rows=[],
+        debug_rows=discovery_debug_rows,
         forbidden_keywords=forbidden_keywords,
         provider=state.get("provider", "Cloud (Groq)"),
     )
@@ -1133,6 +1177,7 @@ def discovery_node(state: GraphState) -> Dict[str, Any]:
         for item in rescued_products:
             if item.lower() not in {p.lower() for p in products}:
                 products.append(item)
+        discovery_debug_rows.extend(rescue_debug_rows)
 
     if len(products) < 5:
         fallback_titles = _hard_filter_product_candidates(
@@ -1144,9 +1189,17 @@ def discovery_node(state: GraphState) -> Dict[str, Any]:
             if len(products) >= 5:
                 break
 
+    if not products:
+        seed_products = _seed_products_from_category(state["category"])
+        logger.warning(
+            "Discovery produced zero products after cleaning for category '%s'. Using deterministic seed products.",
+            state["category"],
+        )
+        products.extend(seed_products)
+
     if DEBUG_MODE:
         _log_category_profile(category_profile, state["category"])
-        _print_discovery_debug_table([])
+        _print_discovery_debug_table(discovery_debug_rows)
         print(
             f"[DEBUG] Category '{state['category']}' minimum viable price: ${minimum_viable_price:.2f}"
         )
@@ -1214,7 +1267,32 @@ def deep_research_node(state: GraphState) -> Dict[str, Any]:
                     break
         except Exception as exc:
             logger.error("Deep research search failed for product '%s': %s", product, exc)
-            raise RuntimeError("Deep research node failed due to Tavily search error.") from exc
+            logger.warning(
+                "Using fallback deep-research metrics for '%s' so the pipeline can continue.",
+                product,
+            )
+
+            fallback_amazon_price = round(max(minimum_viable_price * 1.8, minimum_viable_price + 10.0), 2)
+            fallback_aliexpress_price = round(max(minimum_viable_price * 1.0, 1.0), 2)
+            fallback_shipping_days = 10.0
+            fallback_demand_score = 52.0
+            fallback_supply_reliability = 55.0
+
+            researched.append(
+                {
+                    "product_name": product,
+                    "demand_score": fallback_demand_score,
+                    "demand_notes": "Fallback demand estimate used because Tavily search was unavailable.",
+                    "sentiment_score": 50.0,
+                    "sentiment_notes": "Sentiment pending analysis.",
+                    "amazon_avg_price": fallback_amazon_price,
+                    "aliexpress_avg_price": fallback_aliexpress_price,
+                    "margin_score": _estimate_margin_score(fallback_amazon_price, fallback_aliexpress_price),
+                    "shipping_days": fallback_shipping_days,
+                    "supply_reliability_score": fallback_supply_reliability,
+                }
+            )
+            continue
 
         demand_text = json.dumps(demand_raw, ensure_ascii=True)
         supply_text = json.dumps(supply_raw_list, ensure_ascii=True)
